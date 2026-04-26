@@ -218,7 +218,8 @@ app.post('/mcp', mcpLimiter, (req: Request, _res, next) => {
 app.get('/mcp', async (req: Request, res: Response) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   if (!sessionId || !sessions.has(sessionId)) {
-    res.status(404).json({ error: 'Session not found' });
+    // Return 400 not 404 — 404 makes Claude.ai think server doesn't exist
+    res.status(400).json({ error: 'missing_session', message: 'mcp-session-id header required' });
     return;
   }
   await sessions.get(sessionId)!.transport.handleRequest(req, res);
@@ -227,12 +228,17 @@ app.get('/mcp', async (req: Request, res: Response) => {
 app.delete('/mcp', async (req: Request, res: Response) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   if (!sessionId || !sessions.has(sessionId)) {
-    res.status(404).json({ error: 'Session not found' });
+    res.status(400).json({ error: 'missing_session', message: 'mcp-session-id header required' });
     return;
   }
   const session = sessions.get(sessionId)!;
   await session.transport.handleRequest(req, res);
   sessions.delete(sessionId);
+});
+
+// Root — connectivity check
+app.get('/', (_req: Request, res: Response) => {
+  res.json({ service: 'wellows-mcp-server', version: '1.0.0', mcp: '/mcp' });
 });
 
 app.listen(PORT, () => {
