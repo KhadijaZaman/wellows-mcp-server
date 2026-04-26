@@ -150,7 +150,14 @@ app.get('/.well-known/mcp.json', (_req: Request, res: Response) => {
 });
 
 // MCP endpoint — stateless (new server per request)
-app.post('/mcp', mcpLimiter, async (req: Request, res: Response) => {
+app.post('/mcp', mcpLimiter, (req: Request, _res, next) => {
+  // MCP transport requires both Accept types — patch if client omits text/event-stream
+  const accept = req.headers['accept'] ?? '';
+  if (!accept.includes('text/event-stream')) {
+    req.headers['accept'] = 'application/json, text/event-stream';
+  }
+  next();
+}, async (req: Request, res: Response) => {
   if (!IS_DEV) {
     const token = verifyAccessToken(req.headers.authorization);
     if (!token) {
