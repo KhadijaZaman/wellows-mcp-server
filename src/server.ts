@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import helmet from 'helmet';
+import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -40,6 +41,12 @@ function createMcpServer(): McpServer {
 
 const app = express();
 app.use(helmet());
+app.use(cors({
+  origin: ['https://claude.ai', 'https://anthropic.com'],
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'mcp-session-id'],
+  exposedHeaders: ['mcp-session-id'],
+}));
 app.use(express.json({ limit: '1mb' }));
 
 const mcpLimiter = rateLimit({
