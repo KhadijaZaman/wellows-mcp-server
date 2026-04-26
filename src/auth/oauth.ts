@@ -52,7 +52,9 @@ export function createOAuthRouter(): Router {
   router.post('/token', (req: Request, res: Response) => {
     const { grant_type, code, redirect_uri, client_id } = req.body as Record<string, string>;
 
-    if (client_id !== CLIENT_ID) {
+    // client_id is optional — public clients (like Claude.ai) omit it
+    // If provided, verify it matches; if absent, JWT signature alone is sufficient
+    if (client_id && client_id !== CLIENT_ID) {
       res.status(401).json({ error: 'invalid_client' });
       return;
     }
