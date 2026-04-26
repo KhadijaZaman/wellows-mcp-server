@@ -1,10 +1,21 @@
 import { ScrapeDomainResponse, JobInitResponse, ExtractEntitiesCompleted,
-  GenerateQueriesCompleted, GeneratedQuery, SerpSearchResponse,
-  ExtractEntitiesPollResponse, GenerateQueriesPollResponse } from '../types/index.js';
+  GenerateQueriesCompleted, GeneratedQuery, SerpSearchResponse } from '../types/index.js';
 
 const BASE_URL = process.env.WELLOWS_BASE_URL ?? 'https://wellows.com';
 const POLL_INTERVAL_MS = 3000;
-const POLL_TIMEOUT_MS = 180_000; // 3 minutes per step
+const POLL_TIMEOUT_MS = 180_000;
+
+const PATHS = {
+  scrape:   process.env.API_PATH_SCRAPE   ?? '',
+  entities: process.env.API_PATH_ENTITIES ?? '',
+  queries:  process.env.API_PATH_QUERIES  ?? '',
+  serp:     process.env.API_PATH_SERP     ?? '',
+};
+
+if (Object.values(PATHS).some(p => !p)) {
+  console.error('FATAL: API_PATH_SCRAPE, API_PATH_ENTITIES, API_PATH_QUERIES, API_PATH_SERP must all be set.');
+  process.exit(1);
+}
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -90,7 +101,7 @@ async function pollUntilComplete<T extends { status: string }>(
 // ─── Step 1: Scrape Domain ────────────────────────────────────────────────────
 
 export async function scrapeDomain(domainUrl: string): Promise<ScrapeDomainResponse> {
-  return postJSON<ScrapeDomainResponse>('/api/isqgt/scrape-domain', {
+  return postJSON<ScrapeDomainResponse>(PATHS.scrape, {
     domain: domainUrl,
   });
 }
@@ -101,10 +112,10 @@ export async function extractEntities(
   scrapeData: ScrapeDomainResponse,
   onProgress?: (status: string, elapsed: number) => void
 ): Promise<ExtractEntitiesCompleted> {
-  const init = await postJSON<JobInitResponse>('/api/isqgt/extract-entities', scrapeData);
+  const init = await postJSON<JobInitResponse>(PATHS.entities, scrapeData);
 
   return pollUntilComplete<ExtractEntitiesCompleted>(
-    `/api/isqgt/extract-entities?jobId=${encodeURIComponent(init.jobId)}`,
+    `${PATHS.entities}?jobId=${encodeURIComponent(init.jobId)}`,
     onProgress
   );
 }
@@ -117,10 +128,10 @@ export async function generateQueries(
   onProgress?: (status: string, elapsed: number) => void
 ): Promise<GenerateQueriesCompleted> {
   const merged = { ...scrapeData, ...entitiesData };
-  const init = await postJSON<JobInitResponse>('/api/isqgt/generate-queries', merged);
+  const init = await postJSON<JobInitResponse>(PATHS.queries, merged);
 
   return pollUntilComplete<GenerateQueriesCompleted>(
-    `/api/isqgt/generate-queries?jobId=${encodeURIComponent(init.jobId)}`,
+    `${PATHS.queries}?jobId=${encodeURIComponent(init.jobId)}`,
     onProgress
   );
 }
@@ -149,7 +160,7 @@ export async function runSerpSearches(
 
   for (const batch of batches) {
     const response = await postJSON<SerpSearchResponse>(
-      '/api/ai-overviews-tracker/serp-search/',
+      PATHS.serp,
       {
         queries: batch,
         domain: scrapeData.domain,
