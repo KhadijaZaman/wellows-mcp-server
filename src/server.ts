@@ -79,7 +79,18 @@ app.get('/health', (_req: Request, res: Response) => {
 // OAuth endpoints
 app.use('/oauth', oauthLimiter, createOAuthRouter());
 
-// OAuth authorization server metadata — RFC 8414 (what Claude.ai actually fetches)
+// RFC 9728 — Protected Resource Metadata (Claude.ai fetches this FIRST from the MCP URL path)
+app.get('/.well-known/oauth-protected-resource/mcp', (_req: Request, res: Response) => {
+  const base = process.env.SERVER_URL ?? `http://localhost:${PORT}`;
+  res.json({
+    resource: `${base}/mcp`,
+    authorization_servers: [base],
+    bearer_methods_supported: ['header'],
+    scopes_supported: ['mcp:tools'],
+  });
+});
+
+// RFC 8414 — OAuth Authorization Server Metadata
 app.get('/.well-known/oauth-authorization-server', (_req: Request, res: Response) => {
   const base = process.env.SERVER_URL ?? `http://localhost:${PORT}`;
   res.json({
@@ -162,7 +173,7 @@ app.post('/mcp', mcpLimiter, (req: Request, _res, next) => {
     const token = verifyAccessToken(req.headers.authorization);
     if (!token) {
       const base = process.env.SERVER_URL ?? `http://localhost:${PORT}`;
-      res.set('WWW-Authenticate', `Bearer realm="${base}", resource_metadata="${base}/.well-known/oauth-authorization-server"`);
+      res.set('WWW-Authenticate', `Bearer realm="${base}", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`);
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
