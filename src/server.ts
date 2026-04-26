@@ -69,8 +69,8 @@ app.get('/.well-known/mcp.json', (_req: Request, res: Response) => {
     logo_url: process.env.LOGO_URL ?? 'https://wellows.com/logo-512.png',
     contact_email: 'support@wellows.com',
     legal: {
-      privacy_policy_url: 'https://wellows.com/privacy',
-      terms_of_service_url: 'https://wellows.com/terms',
+      privacy_policy_url: 'https://wellows.com/privacy-policy/',
+      terms_of_service_url: 'https://wellows.com/terms-of-service/',
     },
     oauth: {
       authorization_url: `${base}/oauth/authorize`,
