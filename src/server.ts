@@ -1,5 +1,7 @@
 import 'dotenv/config';
 import express, { Request, Response } from 'express';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
@@ -11,6 +13,13 @@ import { registerInterpretScoreTool } from './tools/interpretScore.js';
 import { createOAuthRouter, verifyAccessToken } from './auth/oauth.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
+const IS_DEV = process.env.NODE_ENV !== 'production';
+
+// Startup validation — fail fast rather than silently run insecure
+if (!IS_DEV && (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'change-me-in-production')) {
+  console.error('FATAL: JWT_SECRET must be set to a strong secret in production.');
+  process.exit(1);
+}
 
 // Per-session server map for stateful transports
 const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>();
@@ -30,7 +39,24 @@ function createMcpServer(): McpServer {
 }
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+app.use(helmet());
+app.use(express.json({ limit: '1mb' }));
+
+const mcpLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please slow down.' },
+});
+
+const oauthLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please slow down.' },
+});
 
 // Health check (no auth required)
 app.get('/health', (_req: Request, res: Response) => {
@@ -43,7 +69,7 @@ app.get('/health', (_req: Request, res: Response) => {
 });
 
 // OAuth endpoints
-app.use('/oauth', createOAuthRouter());
+app.use('/oauth', oauthLimiter, createOAuthRouter());
 
 // OpenID configuration for Claude.ai discovery
 app.get('/.well-known/openid-configuration', (_req: Request, res: Response) => {
@@ -102,9 +128,8 @@ app.get('/.well-known/mcp.json', (_req: Request, res: Response) => {
 });
 
 // MCP endpoint — stateless (new server per request)
-app.post('/mcp', async (req: Request, res: Response) => {
-  // Verify auth if JWT_SECRET is configured beyond the default
-  if (process.env.JWT_SECRET && process.env.JWT_SECRET !== 'change-me-in-production') {
+app.post('/mcp', mcpLimiter, async (req: Request, res: Response) => {
+  if (!IS_DEV) {
     const token = verifyAccessToken(req.headers.authorization);
     if (!token) {
       res.status(401).json({ error: 'Unauthorized' });
