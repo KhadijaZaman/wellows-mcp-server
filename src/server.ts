@@ -78,7 +78,21 @@ app.get('/health', (_req: Request, res: Response) => {
 // OAuth endpoints
 app.use('/oauth', oauthLimiter, createOAuthRouter());
 
-// OpenID configuration for Claude.ai discovery
+// OAuth authorization server metadata — RFC 8414 (what Claude.ai actually fetches)
+app.get('/.well-known/oauth-authorization-server', (_req: Request, res: Response) => {
+  const base = process.env.SERVER_URL ?? `http://localhost:${PORT}`;
+  res.json({
+    issuer: base,
+    authorization_endpoint: `${base}/oauth/authorize`,
+    token_endpoint: `${base}/oauth/token`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code'],
+    code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['none'],
+  });
+});
+
+// OpenID configuration — fallback discovery endpoint
 app.get('/.well-known/openid-configuration', (_req: Request, res: Response) => {
   const base = process.env.SERVER_URL ?? `http://localhost:${PORT}`;
   res.json({
@@ -139,6 +153,8 @@ app.post('/mcp', mcpLimiter, async (req: Request, res: Response) => {
   if (!IS_DEV) {
     const token = verifyAccessToken(req.headers.authorization);
     if (!token) {
+      const base = process.env.SERVER_URL ?? `http://localhost:${PORT}`;
+      res.set('WWW-Authenticate', `Bearer realm="${base}", resource_metadata="${base}/.well-known/oauth-authorization-server"`);
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
