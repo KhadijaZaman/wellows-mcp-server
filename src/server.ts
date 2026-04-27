@@ -43,7 +43,7 @@ const app = express();
 app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cors({
-  origin: ['https://claude.ai', 'https://anthropic.com'],
+  origin: '*',
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'mcp-session-id'],
   exposedHeaders: ['mcp-session-id'],
