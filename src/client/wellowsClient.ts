@@ -1,5 +1,7 @@
 import { ScrapeDomainResponse, JobInitResponse, ExtractEntitiesCompleted,
-  GenerateQueriesCompleted, GeneratedQuery, SerpSearchResponse } from '../types/index.js';
+  GenerateQueriesCompleted, GeneratedQuery, CitationSource, CitationType,
+  QueryResult, AIOSource, CitationAnalysis, SentimentType } from '../types/index.js';
+import { fetchAIOForQueries } from './dataForSeoClient.js';
 
 const BASE_URL = process.env.WELLOWS_BASE_URL ?? 'https://wellows.com';
 const POLL_INTERVAL_MS = 3000;
@@ -9,11 +11,10 @@ const PATHS = {
   scrape:   process.env.API_PATH_SCRAPE   ?? '',
   entities: process.env.API_PATH_ENTITIES ?? '',
   queries:  process.env.API_PATH_QUERIES  ?? '',
-  serp:     process.env.API_PATH_SERP     ?? '',
 };
 
 if (Object.values(PATHS).some(p => !p)) {
-  console.error('FATAL: API_PATH_SCRAPE, API_PATH_ENTITIES, API_PATH_QUERIES, API_PATH_SERP must all be set.');
+  console.error('FATAL: API_PATH_SCRAPE, API_PATH_ENTITIES, API_PATH_QUERIES must all be set.');
   process.exit(1);
 }
 
@@ -136,52 +137,117 @@ export async function generateQueries(
   );
 }
 
-// ─── Step 4: SERP Search (batched parallel) ───────────────────────────────────
+// ─── Step 4: AIO Search via DataForSEO ───────────────────────────────────────
 
-const SERP_BATCH_SIZE = 5;
-const SERP_BATCH_DELAY_MS = 500;
-
-function chunkArray<T>(arr: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    chunks.push(arr.slice(i, i + size));
-  }
-  return chunks;
-}
-
-export async function runSerpSearches(
+export async function runAIOSearches(
   queries: GeneratedQuery[],
   scrapeData: ScrapeDomainResponse,
   onProgress?: (completed: number, total: number) => void
-): Promise<Record<string, import('../types/index.js').QueryResult>> {
-  const batches = chunkArray(queries, SERP_BATCH_SIZE);
-  const allResults: Record<string, import('../types/index.js').QueryResult> = {};
-  let completedQueries = 0;
+): Promise<Record<string, QueryResult>> {
+  const targetDomain = scrapeData.domain.toLowerCase().replace(/^www\./, '');
+  const brandLower = scrapeData.brandName.toLowerCase();
 
-  for (const batch of batches) {
-    const response = await postJSON<SerpSearchResponse>(
-      PATHS.serp,
-      {
-        queries: batch,
-        domain: scrapeData.domain,
-        brandName: scrapeData.brandName,
-        domainContent: scrapeData.domainContent,
-      }
+  const aioMap = await fetchAIOForQueries(
+    queries.map(q => q.text),
+    onProgress
+  );
+
+  const results: Record<string, QueryResult> = {};
+
+  for (const q of queries) {
+    const aio = aioMap.get(q.text);
+
+    if (!aio || !aio.aio_triggered) {
+      results[q.id] = {
+        query_id: q.id,
+        query_text: q.text,
+        intent: q.intent,
+        persona_id: q.persona_id,
+        aio_triggered: false,
+        aio_source_count: 0,
+        aio_sources: [],
+        aio_text: '',
+        found_citation: false,
+        domain_appears_directly: false,
+        domain_mentioned_in_context: false,
+        brand_mentioned: false,
+        citation_type: 'none' as CitationType,
+        sources: [],
+        sentiment: 'neutral',
+        related_entities: [],
+        competitor_mentions: [],
+      };
+      continue;
+    }
+
+    // Explicit: target domain URL is one of the cited sources
+    const matchingSources = aio.sources.filter(s =>
+      s.domain === targetDomain ||
+      s.domain.endsWith(`.${targetDomain}`) ||
+      s.url.toLowerCase().includes(targetDomain)
+    );
+    const domain_appears_directly = matchingSources.length > 0;
+
+    // Implicit: brand name or domain appears in the AIO text but domain not directly cited
+    const aioTextLower = aio.aio_text.toLowerCase();
+    const domain_mentioned_in_context = !domain_appears_directly && (
+      aioTextLower.includes(brandLower) ||
+      aioTextLower.includes(targetDomain)
     );
 
-    if (response.success && response.results) {
-      Object.assign(allResults, response.results);
-    }
+    const citation_type: CitationType =
+      domain_appears_directly ? 'explicit' :
+      domain_mentioned_in_context ? 'implicit' :
+      'none';
 
-    completedQueries += batch.length;
-    onProgress?.(completedQueries, queries.length);
+    // All non-target domains in AIO sources = competitors
+    const competitor_mentions = [...new Set(
+      aio.sources
+        .filter(s => s.domain && s.domain !== targetDomain && !s.domain.endsWith(`.${targetDomain}`))
+        .map(s => s.domain)
+    )];
 
-    if (batches.indexOf(batch) < batches.length - 1) {
-      await sleep(SERP_BATCH_DELAY_MS);
-    }
+    // CitationSource entries only for matching (target) sources
+    const citationSources: CitationSource[] = matchingSources.map(s => ({
+      url: s.url,
+      title: s.title,
+      excerpt: '',
+      confidence: 1.0,
+      position: s.position,
+      position_weight: s.position_weight,
+    }));
+
+    // Map RawAIOSource → AIOSource (same shape, just narrowed type)
+    const aio_sources: AIOSource[] = aio.sources.map(s => ({
+      url: s.url,
+      title: s.title,
+      domain: s.domain,
+      position: s.position,
+      position_weight: s.position_weight,
+    }));
+
+    results[q.id] = {
+      query_id: q.id,
+      query_text: q.text,
+      intent: q.intent,
+      persona_id: q.persona_id,
+      aio_triggered: true,
+      aio_source_count: aio.sources.length,
+      aio_sources,
+      aio_text: aio.aio_text,
+      found_citation: domain_appears_directly,
+      domain_appears_directly,
+      domain_mentioned_in_context,
+      brand_mentioned: domain_appears_directly || domain_mentioned_in_context,
+      citation_type,
+      sources: citationSources,
+      sentiment: 'neutral',
+      related_entities: [],
+      competitor_mentions,
+    };
   }
 
-  return allResults;
+  return results;
 }
 
 // ─── Aggregate Results ────────────────────────────────────────────────────────
@@ -189,10 +255,11 @@ export async function runSerpSearches(
 export function aggregateCitationAnalysis(
   domain: string,
   queries: GeneratedQuery[],
-  serpResults: Record<string, import('../types/index.js').QueryResult>
-): import('../types/index.js').CitationAnalysis {
-  const results = queries.map(q => serpResults[q.id]).filter(Boolean);
+  aioResults: Record<string, QueryResult>
+): CitationAnalysis {
+  const results = queries.map(q => aioResults[q.id]).filter(Boolean);
 
+  const aioTriggeredCount = results.filter(r => r.aio_triggered).length;
   const directCitations = results.filter(r => r.citation_type === 'explicit').length;
   const thirdPartyCitations = results.filter(r => r.citation_type === 'implicit').length;
   const totalCitations = directCitations + thirdPartyCitations;
@@ -203,7 +270,7 @@ export function aggregateCitationAnalysis(
   const sentimentCounts: Record<string, number> = {};
 
   for (const result of results) {
-    if (result.found_citation || result.brand_mentioned) {
+    if (result.found_citation) {
       for (const source of result.sources) {
         if (source.position >= 1 && source.position <= 5) {
           const key = `position_${source.position}` as keyof typeof positionDist;
@@ -229,13 +296,14 @@ export function aggregateCitationAnalysis(
   const citationRate = totalQueries > 0 ? totalCitations / totalQueries : 0;
   const maxScore = totalQueries * 10;
   const weightedRate = maxScore > 0 ? weightedScore / maxScore : 0;
-
   const avgSentiment = (Object.entries(sentimentCounts)
-    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'neutral') as import('../types/index.js').SentimentType;
+    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'neutral') as SentimentType;
 
   return {
     domain,
     total_queries: totalQueries,
+    aio_triggered_count: aioTriggeredCount,
+    aio_trigger_rate: totalQueries > 0 ? aioTriggeredCount / totalQueries : 0,
     citation_rate: citationRate,
     weighted_citation_rate: weightedRate,
     average_sentiment: avgSentiment,

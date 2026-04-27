@@ -103,22 +103,24 @@ export interface GenerateQueriesCompleted {
 
 export type GenerateQueriesPollResponse = JobPollInProgress | GenerateQueriesCompleted;
 
-// ── SERP Search ──
-
-export interface SerpSearchRequest {
-  queries: GeneratedQuery[];
-  domain: string;        // Bare domain: "purevpn.com"
-  brandName: string;     // Uppercased: "PUREVPN"
-  domainContent: string; // Full scraped content string
-}
+// ── SERP / AIO ──
 
 export interface CitationSource {
   url: string;
   title: string;
   excerpt: string;
-  confidence: number;       // Always 0.95 in current impl
+  confidence: number;
   position: number;         // 1-based position in AI Overview sources
-  position_weight: number;  // position→weight: 1→10, 2→9, 3→8, 4→7, 5→6
+  position_weight: number;  // 1→10, 2→9, 3→8, 4→7, 5→6, 6+→decreasing
+}
+
+// One URL cited by Google AI Overview
+export interface AIOSource {
+  url: string;
+  title: string;
+  domain: string;
+  position: number;
+  position_weight: number;
 }
 
 export type CitationType = 'none' | 'explicit' | 'implicit';
@@ -129,18 +131,31 @@ export interface QueryResult {
   query_text: string;
   intent: QueryIntent;
   persona_id: string;
-  found_citation: boolean;
-  brand_mentioned: boolean;
-  citation_type: CitationType;
+
+  // AIO detection (new)
+  aio_triggered: boolean;               // Was AI Overview shown for this query?
+  aio_source_count: number;             // How many URLs AIO cited (0 if not triggered)
+  aio_sources: AIOSource[];             // All cited URLs returned by DataForSEO
+  aio_text: string;                     // Full AI Overview text (empty if not triggered)
+
+  // Domain citation (derived from AIO data)
+  found_citation: boolean;              // target domain URL appears in aio_sources
+  domain_appears_directly: boolean;     // same as found_citation (explicit)
+  domain_mentioned_in_context: boolean; // brand/domain in AIO text via 3rd-party source
+  brand_mentioned: boolean;             // found_citation OR domain_mentioned_in_context
+  citation_type: CitationType;          // explicit | implicit | none
+
+  // Scoring helpers (only sources matching target domain)
   sources: CitationSource[];
   sentiment: SentimentType;
   related_entities: string[];
-  competitor_mentions: string[]; // Bare domains: ["ftc.gov", "cnet.com"]
+  competitor_mentions: string[];        // other domains in aio_sources
 }
 
+// kept for backwards-compat with any existing callers
 export interface SerpSearchResponse {
   success: boolean;
-  results: Record<string, QueryResult>; // Keyed by query_id
+  results: Record<string, QueryResult>;
   serpDataAvailable: boolean;
   serpError: string | null;
   queriesCount: number;
@@ -165,14 +180,16 @@ export interface CompetitorPresenceEntry {
 export interface CitationAnalysis {
   domain: string;
   total_queries: number;
-  citation_rate: number;           // 0.0 – 1.0
+  aio_triggered_count: number;     // queries where AI Overview actually appeared
+  aio_trigger_rate: number;        // aio_triggered_count / total_queries
+  citation_rate: number;           // total_citations / total_queries (0.0–1.0)
   weighted_citation_rate: number;
   average_sentiment: SentimentType;
   total_citations: number;
-  direct_citations: number;        // Explicit citations
-  third_party_citations: number;   // Implicit citations
+  direct_citations: number;        // explicit: target domain URL in AIO sources
+  third_party_citations: number;   // implicit: brand mentioned in AIO text
   weighted_citation_score: number;
-  max_possible_weighted_score: number; // 400 for 40 queries
+  max_possible_weighted_score: number;
   position_distribution: PositionDistribution;
   entity_visibility: Record<string, unknown>;
   competitor_presence: Record<string, CompetitorPresenceEntry>;
@@ -190,11 +207,14 @@ export interface VisibilityReport {
   implicit_citations: number;
   total_citations: number;
   queries_run: number;
+  aio_triggered_count: number;     // queries that actually showed AI Overview
+  aio_trigger_rate_pct: number;    // percentage
   avg_citation_position: number | null;
+  avg_sources_per_aio: number | null; // avg URLs cited when AIO was triggered
   position_distribution: PositionDistribution;
   sentiment: SentimentType;
   top_competitor_domains: Array<{ domain: string; mentions: number }>;
   top_cited_queries: QueryResult[];
-  missed_opportunities: number;
+  missed_opportunities: number;    // triggered AIOs where brand not cited
   raw_analysis: CitationAnalysis;
 }

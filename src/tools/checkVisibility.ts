@@ -2,19 +2,24 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
   scrapeDomain, extractEntities, generateQueries,
-  runSerpSearches, aggregateCitationAnalysis
+  runAIOSearches, aggregateCitationAnalysis
 } from '../client/wellowsClient.js';
 import type { VisibilityReport, CitationAnalysis } from '../types/index.js';
 
 function buildVisibilityReport(
-  domainUrl: string,
+  _domainUrl: string,
   brandName: string,
   analysis: CitationAnalysis
 ): VisibilityReport {
-  const citedResults = analysis.results.filter(r => r.found_citation || r.brand_mentioned);
+  const citedResults = analysis.results.filter(r => r.found_citation);
   const avgPosition = citedResults.length > 0
     ? citedResults.flatMap(r => r.sources.map(s => s.position))
-        .reduce((sum, p) => sum + p, 0) / citedResults.length
+        .reduce((sum, p) => sum + p, 0) / citedResults.flatMap(r => r.sources).length
+    : null;
+
+  const triggeredResults = analysis.results.filter(r => r.aio_triggered);
+  const avgSourcesPerAIO = triggeredResults.length > 0
+    ? triggeredResults.reduce((sum, r) => sum + r.aio_source_count, 0) / triggeredResults.length
     : null;
 
   const topCompetitors = Object.entries(analysis.competitor_presence)
@@ -31,12 +36,15 @@ function buildVisibilityReport(
     implicit_citations: analysis.third_party_citations,
     total_citations: analysis.total_citations,
     queries_run: analysis.total_queries,
+    aio_triggered_count: analysis.aio_triggered_count,
+    aio_trigger_rate_pct: Math.round(analysis.aio_trigger_rate * 10000) / 100,
     avg_citation_position: avgPosition !== null ? Math.round(avgPosition * 10) / 10 : null,
+    avg_sources_per_aio: avgSourcesPerAIO !== null ? Math.round(avgSourcesPerAIO * 10) / 10 : null,
     position_distribution: analysis.position_distribution,
     sentiment: analysis.average_sentiment,
     top_competitor_domains: topCompetitors,
     top_cited_queries: citedResults.slice(0, 5),
-    missed_opportunities: analysis.total_queries - analysis.total_citations,
+    missed_opportunities: analysis.aio_triggered_count - analysis.total_citations,
     raw_analysis: analysis,
   };
 }
@@ -59,10 +67,20 @@ function formatReportAsText(report: VisibilityReport): string {
     .join('\n');
 
   const citedQueryLines = report.top_cited_queries.length > 0
-    ? report.top_cited_queries
-        .map((r, i) => `  ${i + 1}. "${r.query_text}" → ${r.citation_type} (pos ${r.sources[0]?.position ?? '?'})`)
-        .join('\n')
-    : '  None — your brand was not cited in any of the 40 tracked queries.';
+    ? report.top_cited_queries.map((r, i) => {
+        const sourceList = r.aio_sources.slice(0, 5)
+          .map(s => `    ${s.position}. ${s.url}`)
+          .join('\n');
+        const more = r.aio_source_count > 5 ? `\n    … +${r.aio_source_count - 5} more` : '';
+        return `  ${i + 1}. "${r.query_text}" → ${r.citation_type} (${r.aio_source_count} URLs cited)\n${sourceList}${more}`;
+      }).join('\n')
+    : '  None — brand not cited in any of the tracked queries.';
+
+  // Per-query AIO breakdown
+  const allResults = report.raw_analysis.results;
+  const notTriggered = allResults.filter(r => !r.aio_triggered).length;
+  const triggeredNoCitation = allResults.filter(r => r.aio_triggered && r.citation_type === 'none').length;
+  const triggeredWithCitation = allResults.filter(r => r.aio_triggered && r.citation_type !== 'none').length;
 
   return `## Google AI Overviews Visibility Report
 **Domain:** ${report.domain}
@@ -72,21 +90,25 @@ function formatReportAsText(report: VisibilityReport): string {
 ---
 
 ### Citation Score: ${score.toFixed(2)}% ${grade}
-Your brand was cited in **${report.total_citations}** of **${report.queries_run}** AI Overview responses.
+Your brand was cited in **${report.total_citations}** of **${report.queries_run}** queries.
 
 | Metric | Value |
 |---|---|
-| Explicit Citations (direct domain link) | ${report.explicit_citations} |
-| Implicit Citations (brand mention via 3rd party) | ${report.implicit_citations} |
+| AI Overview Triggered | ${report.aio_triggered_count} / ${report.queries_run} queries (${report.aio_trigger_rate_pct}%) |
+| AI Overview NOT Triggered | ${notTriggered} queries |
+| AIO Triggered — Brand Cited | ${triggeredWithCitation} queries |
+| AIO Triggered — Brand Missing | ${triggeredNoCitation} queries (missed opportunities) |
+| Explicit Citations (direct URL) | ${report.explicit_citations} |
+| Implicit Citations (brand in AIO text) | ${report.implicit_citations} |
 | Average Citation Position | ${report.avg_citation_position !== null ? report.avg_citation_position : 'N/A'} |
+| Avg URLs Cited per AIO | ${report.avg_sources_per_aio !== null ? report.avg_sources_per_aio : 'N/A'} |
 | Brand Sentiment in Overviews | ${report.sentiment} |
-| Missed Opportunities | ${report.missed_opportunities} queries |
 | Weighted Citation Score | ${report.raw_analysis.weighted_citation_score} / ${report.raw_analysis.max_possible_weighted_score} |
 
 ### Citation Position Distribution
 ${posDistLines}
 
-### Where Your Brand Was Cited
+### Where Your Brand Was Cited (with cited URLs)
 ${citedQueryLines}
 
 ### Top Competing Domains in Your AI Overviews
@@ -102,16 +124,15 @@ export function registerCheckVisibilityTool(server: McpServer): void {
     'check_ai_overviews_visibility',
     `Analyze a domain's full citation score and visibility within Google AI Overviews.
 Crawls the domain, extracts brand entities, generates 40 intent-driven search queries,
-scans live Google AI Overview responses for each query, and returns a complete scorecard:
-citation score %, explicit citations (direct domain links), implicit citations (3rd-party
-brand mentions), average citation position (1=best), sentiment analysis, top competing
-domains, and missed opportunity count. Takes approximately 4-5 minutes to complete.
-Use when a user asks about their Google AI Overviews visibility, citation score, AI search
-presence, or whether their brand appears in Google's AI-generated answers.`,
+then uses DataForSEO to scan live Google AI Overview responses for each query.
+Returns: whether AI Overview was triggered per query, all cited URLs per query,
+explicit citations (direct domain link), implicit citations (brand mentioned in AIO text
+by a third-party source), citation score %, average position, avg URLs cited per AIO,
+top competing domains, and missed opportunity count. Takes approximately 4-5 minutes.`,
     {
       domain: z.string()
         .url('Must be a valid URL')
-        .describe('The domain to analyze. Include the full URL with protocol, e.g. https://www.purevpn.com'),
+        .describe('The domain to analyze. Include full URL with protocol, e.g. https://www.purevpn.com'),
     },
     async ({ domain }, _extra) => {
       const steps: string[] = [];
@@ -133,21 +154,23 @@ presence, or whether their brand appears in Google's AI-generated answers.`,
         });
         steps.push(`✓ Generated ${queriesData.queries.length} queries`);
 
-        steps.push(`Scanning Google AI Overviews for ${queriesData.queries.length} queries (this takes ~3 min)...`);
+        steps.push(`Scanning Google AI Overviews via DataForSEO for ${queriesData.queries.length} queries...`);
         let lastProgress = 0;
-        const serpResults = await runSerpSearches(
+        const aioResults = await runAIOSearches(
           queriesData.queries,
           scrapeData,
           (completed, total) => {
             if (completed - lastProgress >= 5 || completed === total) {
-              steps.push(`  SERP scan: ${completed}/${total} queries processed`);
+              steps.push(`  AIO scan: ${completed}/${total} queries processed`);
               lastProgress = completed;
             }
           }
         );
-        steps.push(`✓ SERP scan complete. ${Object.keys(serpResults).length} queries returned results.`);
 
-        const analysis = aggregateCitationAnalysis(scrapeData.domain, queriesData.queries, serpResults);
+        const triggeredCount = Object.values(aioResults).filter(r => r.aio_triggered).length;
+        steps.push(`✓ AIO scan complete. ${triggeredCount}/${queriesData.queries.length} queries triggered AI Overview.`);
+
+        const analysis = aggregateCitationAnalysis(scrapeData.domain, queriesData.queries, aioResults);
         const report = buildVisibilityReport(domain, scrapeData.brandName, analysis);
         const formatted = formatReportAsText(report);
 
