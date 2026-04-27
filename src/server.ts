@@ -11,7 +11,7 @@ import { registerCheckVisibilityTool } from './tools/checkVisibility.js';
 import { registerExtractEntitiesTool } from './tools/extractEntities.js';
 import { registerGenerateQueriesTool } from './tools/generateQueries.js';
 import { registerInterpretScoreTool } from './tools/interpretScore.js';
-import { createOAuthRouter, verifyAccessToken } from './auth/oauth.js';
+import { createOAuthRouter } from './auth/oauth.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const IS_DEV = process.env.NODE_ENV !== 'production';
@@ -169,15 +169,16 @@ app.post('/mcp', mcpLimiter, (req: Request, _res, next) => {
   }
   next();
 }, async (req: Request, res: Response) => {
-  if (!IS_DEV) {
-    const token = verifyAccessToken(req.headers.authorization);
-    if (!token) {
-      const base = process.env.SERVER_URL ?? `http://localhost:${PORT}`;
-      res.set('WWW-Authenticate', `Bearer realm="${base}", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`);
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-  }
+  // AUTH DISABLED FOR TESTING — re-enable before production
+  // if (!IS_DEV) {
+  //   const token = verifyAccessToken(req.headers.authorization);
+  //   if (!token) {
+  //     const base = process.env.SERVER_URL ?? `http://localhost:${PORT}`;
+  //     res.set('WWW-Authenticate', `Bearer realm="${base}", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`);
+  //     res.status(401).json({ error: 'Unauthorized' });
+  //     return;
+  //   }
+  // }
 
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
