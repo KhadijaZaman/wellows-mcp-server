@@ -123,7 +123,7 @@ export interface AIOSource {
   position_weight: number;
 }
 
-export type CitationType = 'none' | 'explicit' | 'implicit';
+export type CitationType = 'none' | 'explicit' | 'implicit' | 'serp';
 export type SentimentType = 'positive' | 'neutral' | 'negative' | 'mixed';
 
 export interface QueryResult {
@@ -144,6 +144,10 @@ export interface QueryResult {
   domain_mentioned_in_context: boolean; // brand/domain in AIO text via 3rd-party source
   brand_mentioned: boolean;             // found_citation OR domain_mentioned_in_context
   citation_type: CitationType;          // explicit | implicit | none
+
+  // SERP fallback (when aio_triggered = false)
+  domain_in_serp: boolean;             // target domain found in organic SERP top 10
+  serp_rank: number | null;            // organic position (1-based), null if not found
 
   // Scoring helpers (only sources matching target domain)
   sources: CitationSource[];
@@ -182,6 +186,7 @@ export interface CitationAnalysis {
   total_queries: number;
   aio_triggered_count: number;     // queries where AI Overview actually appeared
   aio_trigger_rate: number;        // aio_triggered_count / total_queries
+  serp_citations: number;          // queries where AIO not triggered but domain in top-10 organic
   citation_rate: number;           // total_citations / total_queries (0.0–1.0)
   weighted_citation_rate: number;
   average_sentiment: SentimentType;
@@ -209,6 +214,7 @@ export interface VisibilityReport {
   queries_run: number;
   aio_triggered_count: number;     // queries that actually showed AI Overview
   aio_trigger_rate_pct: number;    // percentage
+  serp_citations: number;          // fallback: AIO absent but domain in organic top 10
   avg_citation_position: number | null;
   avg_sources_per_aio: number | null; // avg URLs cited when AIO was triggered
   position_distribution: PositionDistribution;

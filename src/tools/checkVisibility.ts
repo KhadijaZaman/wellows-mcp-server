@@ -44,6 +44,7 @@ function buildVisibilityReport(
     sentiment: analysis.average_sentiment,
     top_competitor_domains: topCompetitors,
     top_cited_queries: citedResults.slice(0, 5),
+    serp_citations: analysis.serp_citations,
     missed_opportunities: analysis.aio_triggered_count - analysis.total_citations,
     raw_analysis: analysis,
   };
@@ -98,7 +99,8 @@ Your brand was cited in **${report.total_citations}** of **${report.queries_run}
 | AI Overview NOT Triggered | ${notTriggered} queries |
 | AIO Triggered — Brand Cited | ${triggeredWithCitation} queries |
 | AIO Triggered — Brand Missing | ${triggeredNoCitation} queries (missed opportunities) |
-| Explicit Citations (direct URL) | ${report.explicit_citations} |
+| SERP Fallback — Brand in Organic Top 10 | ${report.serp_citations} queries (no AIO shown) |
+| Explicit Citations (direct URL in AIO) | ${report.explicit_citations} |
 | Implicit Citations (brand in AIO text) | ${report.implicit_citations} |
 | Average Citation Position | ${report.avg_citation_position !== null ? report.avg_citation_position : 'N/A'} |
 | Avg URLs Cited per AIO | ${report.avg_sources_per_aio !== null ? report.avg_sources_per_aio : 'N/A'} |

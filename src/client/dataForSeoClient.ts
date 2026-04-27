@@ -34,11 +34,19 @@ export interface RawAIOSource {
   position_weight: number;
 }
 
+export interface RawSERPSource {
+  url: string;
+  title: string;
+  domain: string;
+  position: number;
+}
+
 export interface RawAIOResult {
   query: string;
   aio_triggered: boolean;
   aio_text: string;
   sources: RawAIOSource[];
+  serp_sources: RawSERPSource[]; // top 10 organic SERP results (always populated)
 }
 
 // ── DataForSEO response shapes (partial) ────────────────────────────────────
@@ -54,6 +62,11 @@ interface DFSItem {
   type: string;
   text?: string;
   items?: DFSElement[];
+  // organic result fields
+  url?: string;
+  title?: string;
+  domain?: string;
+  rank_absolute?: number;
 }
 
 interface DFSTaskResult {
@@ -97,9 +110,33 @@ function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
+const EMPTY_RESULT: Omit<RawAIOResult, 'query'> = {
+  aio_triggered: false,
+  aio_text: '',
+  sources: [],
+  serp_sources: [],
+};
+
 function parseAIOFromItems(items: DFSItem[]): Omit<RawAIOResult, 'query'> {
+  // Parse organic SERP results (top 10) — always present regardless of AIO
+  const serp_sources: RawSERPSource[] = items
+    .filter(el => el.type === 'organic' && el.url)
+    .slice(0, 10)
+    .map(el => {
+      let domain = el.domain ?? '';
+      if (!domain && el.url) {
+        try { domain = new URL(el.url).hostname.replace(/^www\./, ''); } catch { domain = ''; }
+      }
+      return {
+        url: el.url!,
+        title: el.title ?? '',
+        domain,
+        position: el.rank_absolute ?? 0,
+      };
+    });
+
   const aioBlock = items.find(item => item.type === 'ai_overview');
-  if (!aioBlock) return { aio_triggered: false, aio_text: '', sources: [] };
+  if (!aioBlock) return { aio_triggered: false, aio_text: '', sources: [], serp_sources };
 
   const sources: RawAIOSource[] = (aioBlock.items ?? [])
     .filter(el => el.type === 'ai_overview_element' && el.url)
@@ -112,7 +149,7 @@ function parseAIOFromItems(items: DFSItem[]): Omit<RawAIOResult, 'query'> {
       return { url: el.url!, title: el.title ?? '', domain, position: pos, position_weight: positionWeight(pos) };
     });
 
-  return { aio_triggered: true, aio_text: aioBlock.text ?? '', sources };
+  return { aio_triggered: true, aio_text: aioBlock.text ?? '', sources, serp_sources };
 }
 
 // ── Step 1: Submit all queries as tasks (single fast POST) ───────────────────
@@ -216,7 +253,7 @@ async function fetchTaskResults(
         );
 
         if (!res.ok) {
-          resultMap.set(keyword, { query: keyword, aio_triggered: false, aio_text: '', sources: [] });
+          resultMap.set(keyword, { query: keyword, ...EMPTY_RESULT });
           return;
         }
 
@@ -226,7 +263,7 @@ async function fetchTaskResults(
         const parsed = parseAIOFromItems(items);
         resultMap.set(keyword, { query: keyword, ...parsed });
       } catch {
-        resultMap.set(keyword, { query: keyword, aio_triggered: false, aio_text: '', sources: [] });
+        resultMap.set(keyword, { query: keyword, ...EMPTY_RESULT });
       }
     }));
 
@@ -253,7 +290,7 @@ export async function fetchAIOForQueries(
     // All task submissions failed
     const fallback = new Map<string, RawAIOResult>();
     for (const q of queries) {
-      fallback.set(q, { query: q, aio_triggered: false, aio_text: '', sources: [] });
+      fallback.set(q, { query: q, ...EMPTY_RESULT });
     }
     return fallback;
   }
@@ -269,7 +306,7 @@ export async function fetchAIOForQueries(
   // Fill in failed/timed-out queries with empty results
   for (const q of queries) {
     if (!resultMap.has(q)) {
-      resultMap.set(q, { query: q, aio_triggered: false, aio_text: '', sources: [] });
+      resultMap.set(q, { query: q, ...EMPTY_RESULT });
     }
   }
 

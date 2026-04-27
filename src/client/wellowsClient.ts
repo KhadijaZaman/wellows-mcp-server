@@ -158,6 +158,13 @@ export async function runAIOSearches(
     const aio = aioMap.get(q.text);
 
     if (!aio || !aio.aio_triggered) {
+      // SERP fallback: AIO not triggered — check organic results for target domain
+      const serpMatch = (aio?.serp_sources ?? []).find(s =>
+        s.domain === targetDomain ||
+        s.domain.endsWith(`.${targetDomain}`) ||
+        s.url.toLowerCase().includes(targetDomain)
+      );
+
       results[q.id] = {
         query_id: q.id,
         query_text: q.text,
@@ -171,8 +178,17 @@ export async function runAIOSearches(
         domain_appears_directly: false,
         domain_mentioned_in_context: false,
         brand_mentioned: false,
-        citation_type: 'none' as CitationType,
-        sources: [],
+        citation_type: serpMatch ? 'serp' as CitationType : 'none' as CitationType,
+        domain_in_serp: !!serpMatch,
+        serp_rank: serpMatch?.position ?? null,
+        sources: serpMatch ? [{
+          url: serpMatch.url,
+          title: serpMatch.title,
+          excerpt: '',
+          confidence: 1.0,
+          position: serpMatch.position,
+          position_weight: 1,
+        }] : [],
         sentiment: 'neutral',
         related_entities: [],
         competitor_mentions: [],
@@ -240,6 +256,8 @@ export async function runAIOSearches(
       domain_mentioned_in_context,
       brand_mentioned: domain_appears_directly || domain_mentioned_in_context,
       citation_type,
+      domain_in_serp: false,
+      serp_rank: null,
       sources: citationSources,
       sentiment: 'neutral',
       related_entities: [],
@@ -262,6 +280,7 @@ export function aggregateCitationAnalysis(
   const aioTriggeredCount = results.filter(r => r.aio_triggered).length;
   const directCitations = results.filter(r => r.citation_type === 'explicit').length;
   const thirdPartyCitations = results.filter(r => r.citation_type === 'implicit').length;
+  const serpCitations = results.filter(r => r.citation_type === 'serp').length;
   const totalCitations = directCitations + thirdPartyCitations;
 
   let weightedScore = 0;
@@ -304,6 +323,7 @@ export function aggregateCitationAnalysis(
     total_queries: totalQueries,
     aio_triggered_count: aioTriggeredCount,
     aio_trigger_rate: totalQueries > 0 ? aioTriggeredCount / totalQueries : 0,
+    serp_citations: serpCitations,
     citation_rate: citationRate,
     weighted_citation_rate: weightedRate,
     average_sentiment: avgSentiment,
