@@ -4,8 +4,8 @@ import { ScrapeDomainResponse, JobInitResponse, ExtractEntitiesCompleted,
 import { fetchAIOForQueries } from './dataForSeoClient.js';
 
 const BASE_URL = process.env.WELLOWS_BASE_URL ?? 'https://wellows.com';
-const POLL_INTERVAL_MS = 3000;
-const POLL_TIMEOUT_MS = 180_000;
+const POLL_INTERVAL_MS = 2_000;
+const POLL_TIMEOUT_MS = 120_000;
 
 const PATHS = {
   scrape:   process.env.API_PATH_SCRAPE   ?? '',
@@ -29,7 +29,7 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
       'User-Agent': 'Wellows-MCP-Server/1.0',
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(60_000),
+    signal: AbortSignal.timeout(18_000),
   });
 
   if (!res.ok) {
@@ -44,7 +44,7 @@ async function getJSON<T>(path: string): Promise<T> {
   const url = `${BASE_URL}${path}`;
   const res = await fetch(url, {
     headers: { 'User-Agent': 'Wellows-MCP-Server/1.0' },
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (!res.ok) {
