@@ -5,8 +5,6 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import { randomUUID } from 'crypto';
 import { registerCheckVisibilityTool } from './tools/checkVisibility.js';
 import { registerExtractEntitiesTool } from './tools/extractEntities.js';
 import { registerGenerateQueriesTool } from './tools/generateQueries.js';
@@ -21,9 +19,6 @@ if (!IS_DEV && (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'change-me
   console.error('FATAL: JWT_SECRET must be set to a strong secret in production.');
   process.exit(1);
 }
-
-// Per-session server map for stateful transports
-const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>();
 
 function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -160,9 +155,8 @@ app.get('/.well-known/mcp.json', (_req: Request, res: Response) => {
   });
 });
 
-// MCP endpoint — stateless (new server per request)
+// MCP endpoint — fully stateless, new server+transport per request
 app.post('/mcp', mcpLimiter, (req: Request, _res, next) => {
-  // MCP transport requires both Accept types — patch if client omits text/event-stream
   const accept = req.headers['accept'] ?? '';
   if (!accept.includes('text/event-stream')) {
     req.headers['accept'] = 'application/json, text/event-stream';
@@ -180,33 +174,12 @@ app.post('/mcp', mcpLimiter, (req: Request, _res, next) => {
   //   }
   // }
 
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
-
-  if (sessionId && sessions.has(sessionId)) {
-    // Resume existing session
-    const session = sessions.get(sessionId)!;
-    await session.transport.handleRequest(req, res, req.body);
-    return;
-  }
-
-  if (!isInitializeRequest(req.body)) {
-    res.status(400).json({ error: 'bad_request', message: 'Expected initialize request for new session' });
-    return;
-  }
-
-  // New session
   const server = createMcpServer();
   const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-    onsessioninitialized: (id) => {
-      sessions.set(id, { server, transport });
-    },
+    sessionIdGenerator: undefined, // stateless — no session state needed
   });
 
   res.on('close', () => {
-    if (transport.sessionId) {
-      sessions.delete(transport.sessionId);
-    }
     transport.close();
     server.close();
   });
@@ -215,26 +188,14 @@ app.post('/mcp', mcpLimiter, (req: Request, _res, next) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-// SSE notifications (GET) and session close (DELETE)
-app.get('/mcp', async (req: Request, res: Response) => {
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
-  if (!sessionId || !sessions.has(sessionId)) {
-    // Return 400 not 404 — 404 makes Claude.ai think server doesn't exist
-    res.status(400).json({ error: 'missing_session', message: 'mcp-session-id header required' });
-    return;
-  }
-  await sessions.get(sessionId)!.transport.handleRequest(req, res);
+// SSE notifications — not supported in stateless mode
+app.get('/mcp', (_req: Request, res: Response) => {
+  res.status(405).json({ error: 'method_not_allowed', message: 'SSE not supported in stateless mode' });
 });
 
-app.delete('/mcp', async (req: Request, res: Response) => {
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
-  if (!sessionId || !sessions.has(sessionId)) {
-    res.status(400).json({ error: 'missing_session', message: 'mcp-session-id header required' });
-    return;
-  }
-  const session = sessions.get(sessionId)!;
-  await session.transport.handleRequest(req, res);
-  sessions.delete(sessionId);
+// Session close — no-op in stateless mode
+app.delete('/mcp', (_req: Request, res: Response) => {
+  res.status(200).json({ ok: true });
 });
 
 // Root — connectivity check
