@@ -171,7 +171,7 @@ top competing domains, and missed opportunity count. Takes approximately 4-5 min
         });
         steps.push(`✓ Generated ${queriesData.queries.length} queries`);
 
-        steps.push(`Scanning Google AI Overviews via DataForSEO for ${queriesData.queries.length} queries...`);
+        steps.push(`Scanning Google AI Overviews via DataForSEO for ${queriesData.queries.length} queries (pass 1 + auto-retry for non-triggered queries)...`);
         let lastProgress = 0;
         const aioResults = await runAIOSearches(
           queriesData.queries,

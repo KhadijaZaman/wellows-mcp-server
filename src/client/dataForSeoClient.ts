@@ -194,11 +194,15 @@ async function submitTasks(keywords: string[]): Promise<Map<string, string>> {
 
 const POLL_INTERVAL_MS = 5_000;
 const POLL_DEADLINE_MS = 90_000;
+const RETRY_POLL_DEADLINE_MS = 60_000;
 
-async function waitForTasks(taskIdToKeyword: Map<string, string>): Promise<Set<string>> {
+async function waitForTasks(
+  taskIdToKeyword: Map<string, string>,
+  deadlineMs = POLL_DEADLINE_MS
+): Promise<Set<string>> {
   const pending = new Set(taskIdToKeyword.keys());
   const ready = new Set<string>();
-  const deadline = Date.now() + POLL_DEADLINE_MS;
+  const deadline = Date.now() + deadlineMs;
 
   while (pending.size > 0 && Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
@@ -276,39 +280,71 @@ async function fetchTaskResults(
   return resultMap;
 }
 
+// ── Question-variant generator for AIO retry ─────────────────────────────────
+
+const QUESTION_STARTERS = ['what ', 'how ', 'why ', 'when ', 'where ', 'which ', 'who ',
+  'is ', 'are ', 'does ', 'do ', 'can ', 'should ', 'will ', 'would '];
+
+function toQuestionVariant(query: string): string {
+  const lower = query.toLowerCase().trim();
+  if (QUESTION_STARTERS.some(w => lower.startsWith(w))) {
+    return lower.endsWith('?') ? query : query + '?';
+  }
+  return `what is the best ${query}?`;
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export async function fetchAIOForQueries(
   queries: string[],
   onProgress?: (completed: number, total: number) => void
 ): Promise<Map<string, RawAIOResult>> {
-  // 1. Submit all queries as async tasks (fast, < 5s)
+
+  // ── Pass 1: submit all queries ──────────────────────────────────────────────
   const taskIdToKeyword = await submitTasks(queries);
   onProgress?.(0, queries.length);
 
   if (taskIdToKeyword.size === 0) {
-    // All task submissions failed
     const fallback = new Map<string, RawAIOResult>();
-    for (const q of queries) {
-      fallback.set(q, { query: q, ...EMPTY_RESULT });
-    }
+    for (const q of queries) fallback.set(q, { query: q, ...EMPTY_RESULT });
     return fallback;
   }
 
-  // 2. Poll until DataForSEO finishes processing (parallel server-side)
-  const readyTaskIds = await waitForTasks(taskIdToKeyword);
-  onProgress?.(readyTaskIds.size, queries.length);
+  const pass1Ready = await waitForTasks(taskIdToKeyword);
+  const resultMap = await fetchTaskResults([...pass1Ready], taskIdToKeyword);
+  onProgress?.(Math.floor(queries.length * 0.6), queries.length);
 
-  // 3. Fetch results for completed tasks (batches of 10, < 15s each)
-  const resultMap = await fetchTaskResults([...readyTaskIds], taskIdToKeyword);
-  onProgress?.(queries.length, queries.length);
-
-  // Fill in failed/timed-out queries with empty results
+  // Fill in any tasks that timed out in pass 1
   for (const q of queries) {
-    if (!resultMap.has(q)) {
-      resultMap.set(q, { query: q, ...EMPTY_RESULT });
+    if (!resultMap.has(q)) resultMap.set(q, { query: q, ...EMPTY_RESULT });
+  }
+
+  // ── Pass 2: retry queries where AIO did not trigger ─────────────────────────
+  const variantToOriginal = new Map<string, string>();
+  for (const q of queries) {
+    if (!resultMap.get(q)?.aio_triggered) {
+      const variant = toQuestionVariant(q);
+      if (variant !== q) variantToOriginal.set(variant, q);
     }
   }
 
+  if (variantToOriginal.size > 0) {
+    const retryTaskIds = await submitTasks([...variantToOriginal.keys()]);
+
+    if (retryTaskIds.size > 0) {
+      const pass2Ready = await waitForTasks(retryTaskIds, RETRY_POLL_DEADLINE_MS);
+      const retryResults = await fetchTaskResults([...pass2Ready], retryTaskIds);
+
+      // If retry triggered AIO, promote it over the pass-1 result
+      for (const [variant, original] of variantToOriginal) {
+        const r = retryResults.get(variant);
+        if (r?.aio_triggered) {
+          resultMap.set(original, { ...r, query: original });
+        }
+      }
+    }
+  }
+
+  onProgress?.(queries.length, queries.length);
   return resultMap;
 }
