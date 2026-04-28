@@ -123,6 +123,14 @@ export interface AIOSource {
   position_weight: number;
 }
 
+// One organic SERP result (fallback when AIO not triggered)
+export interface SERPSource {
+  url: string;
+  title: string;
+  domain: string;
+  position: number;
+}
+
 export type CitationType = 'none' | 'explicit' | 'implicit' | 'serp';
 export type SentimentType = 'positive' | 'neutral' | 'negative' | 'mixed';
 
@@ -146,6 +154,7 @@ export interface QueryResult {
   citation_type: CitationType;          // explicit | implicit | none
 
   // SERP fallback (when aio_triggered = false)
+  serp_sources: SERPSource[];          // top-10 organic results (populated when AIO absent)
   domain_in_serp: boolean;             // target domain found in organic SERP top 10
   serp_rank: number | null;            // organic position (1-based), null if not found
 

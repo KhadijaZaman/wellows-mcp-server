@@ -77,8 +77,20 @@ function formatReportAsText(report: VisibilityReport): string {
       }).join('\n')
     : '  None — brand not cited in any of the tracked queries.';
 
-  // Per-query AIO breakdown
+  // SERP fallback section — queries where AIO didn't trigger
   const allResults = report.raw_analysis.results;
+  const serpFallbackResults = allResults.filter(r => !r.aio_triggered && r.serp_sources.length > 0);
+  const serpFallbackLines = serpFallbackResults.length > 0
+    ? serpFallbackResults.slice(0, 5).map((r, i) => {
+        const urlList = r.serp_sources.slice(0, 5)
+          .map(s => `    ${s.position}. ${s.url}${r.domain_in_serp && s.domain === (report.domain.replace(/^www\./, '')) ? ' ← YOUR DOMAIN' : ''}`)
+          .join('\n');
+        const more = r.serp_sources.length > 5 ? `\n    … +${r.serp_sources.length - 5} more` : '';
+        return `  ${i + 1}. "${r.query_text}"${r.domain_in_serp ? ` [your domain at #${r.serp_rank}]` : ''}\n${urlList}${more}`;
+      }).join('\n')
+    : '  No SERP data available for queries without AI Overview.';
+
+  // Per-query AIO breakdown
   const notTriggered = allResults.filter(r => !r.aio_triggered).length;
   const triggeredNoCitation = allResults.filter(r => r.aio_triggered && r.citation_type === 'none').length;
   const triggeredWithCitation = allResults.filter(r => r.aio_triggered && r.citation_type !== 'none').length;
@@ -112,6 +124,9 @@ ${posDistLines}
 
 ### Where Your Brand Was Cited (with cited URLs)
 ${citedQueryLines}
+
+### SERP Results for Queries Without AI Overview (sample)
+${serpFallbackLines}
 
 ### Top Competing Domains in Your AI Overviews
 ${competitorLines || '  (none detected)'}

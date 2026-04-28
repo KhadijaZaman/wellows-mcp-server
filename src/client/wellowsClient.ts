@@ -1,6 +1,6 @@
 import { ScrapeDomainResponse, JobInitResponse, ExtractEntitiesCompleted,
   GenerateQueriesCompleted, GeneratedQuery, CitationSource, CitationType,
-  QueryResult, AIOSource, CitationAnalysis, SentimentType } from '../types/index.js';
+  QueryResult, AIOSource, SERPSource, CitationAnalysis, SentimentType } from '../types/index.js';
 import { fetchAIOForQueries } from './dataForSeoClient.js';
 
 const BASE_URL = process.env.WELLOWS_BASE_URL ?? 'https://wellows.com';
@@ -165,6 +165,13 @@ export async function runAIOSearches(
         s.url.toLowerCase().includes(targetDomain)
       );
 
+      const serpSources: SERPSource[] = (aio?.serp_sources ?? []).map(s => ({
+        url: s.url,
+        title: s.title,
+        domain: s.domain,
+        position: s.position,
+      }));
+
       results[q.id] = {
         query_id: q.id,
         query_text: q.text,
@@ -179,6 +186,7 @@ export async function runAIOSearches(
         domain_mentioned_in_context: false,
         brand_mentioned: false,
         citation_type: serpMatch ? 'serp' as CitationType : 'none' as CitationType,
+        serp_sources: serpSources,
         domain_in_serp: !!serpMatch,
         serp_rank: serpMatch?.position ?? null,
         sources: serpMatch ? [{
@@ -256,6 +264,7 @@ export async function runAIOSearches(
       domain_mentioned_in_context,
       brand_mentioned: domain_appears_directly || domain_mentioned_in_context,
       citation_type,
+      serp_sources: [],
       domain_in_serp: false,
       serp_rank: null,
       sources: citationSources,
